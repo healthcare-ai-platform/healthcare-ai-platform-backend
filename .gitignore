@@ -1,0 +1,31 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+
+# S3 uploads (if any)
+json/
+pdfs/
+
+# Database files
+*.db
+*.sqlite
+
+# IDE files
+.vscode/
+.idea/
+
+# Docker files
+docker-compose.override.yml
+
+# AWS credentials (if accidentally included)
+.aws/credentials
+.aws/config
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
