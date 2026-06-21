@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 from aiokafka import AIOKafkaProducer # type: ignore
 
@@ -7,13 +8,15 @@ from app.api.utils.common import common_logger
 
 logger = logging.getLogger(__name__)
 
+_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+
 _producer: AIOKafkaProducer | None = None
 
 
 async def get_producer() -> AIOKafkaProducer:
     global _producer
     if _producer is None:
-        _producer = AIOKafkaProducer(bootstrap_servers="localhost:9092")
+        _producer = AIOKafkaProducer(bootstrap_servers=_BOOTSTRAP_SERVERS)
         await _producer.start()
     return _producer
 

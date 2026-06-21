@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import IO, Optional, Union
 
@@ -12,6 +13,15 @@ logging.basicConfig(
 
 logger = logging.getLogger("healthcare-platform")
 
+# When AWS_ENDPOINT_URL is set (MinIO locally), boto3 routes to that endpoint.
+# When unset (real AWS), the default AWS endpoint is used automatically.
+def _s3_client() -> boto3.client:
+    kwargs = {}
+    endpoint_url = os.getenv("AWS_ENDPOINT_URL")
+    if endpoint_url:
+        kwargs["endpoint_url"] = endpoint_url
+    return boto3.client("s3", **kwargs)
+
 
 def common_logger(message: str, level: str = "info") -> None:
     getattr(logger, level.lower(), logger.info)(message)
@@ -22,8 +32,7 @@ def upload_to_s3(
     bucket_name: str,
     object_name: Optional[str] = None,
 ) -> bool:
-    """Upload a local file path *or* a file-like object to S3."""
-    s3_client = boto3.client("s3")
+    s3_client = _s3_client()
 
     try:
         if isinstance(source, str):

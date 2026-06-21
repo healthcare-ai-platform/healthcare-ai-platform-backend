@@ -1,19 +1,26 @@
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+
+load_dotenv()  # must run before local imports so env vars are set when modules load
+
 from fastapi import FastAPI
 
 from app.api.routers import ai, audit, dashboard, patients, queue, tenants, upload
 from app.db.session import db
+from app.db.warehouse import warehouse
 from app.events.kafka import shutdown_producer
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
+    await warehouse.connect()
     try:
         yield
     finally:
         await db.disconnect()
+        await warehouse.disconnect()
         await shutdown_producer()
 
 
