@@ -89,18 +89,18 @@ async def list_patients(
         LEFT JOIN latest_report lr ON lr.patient_id = p.patient_id
         LEFT JOIN facilities f ON f.facility_id = lr.facility_id
         LEFT JOIN report_counts rc ON rc.patient_id = p.patient_id
-        WHERE (:search IS NULL OR
+        WHERE (:search = '' OR
                p.name ILIKE '%' || :search || '%' OR
                p.external_id ILIKE '%' || :search || '%' OR
                f.name ILIKE '%' || :search || '%')
-          AND (:status IS NULL OR c.clinical_status = :status)
+          AND (:status = '' OR c.clinical_status = :status)
         ORDER BY p.created_at DESC
         LIMIT :limit OFFSET :offset
         """,
         {
             "tenant_id": tenant_id,
-            "search": search,
-            "status": status,
+            "search": search or "",
+            "status": status or "",
             "limit": page_size,
             "offset": (page - 1) * page_size,
         },

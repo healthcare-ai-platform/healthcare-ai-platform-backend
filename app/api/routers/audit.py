@@ -44,7 +44,7 @@ async def list_audit_logs(
         JOIN users u   ON u.user_id    = al.user_id
         JOIN tenants t ON t.tenant_id  = al.tenant_id
         WHERE al.tenant_id = :tenant_id
-          AND (:search IS NULL OR
+          AND (:search = '' OR
                u.name    ILIKE '%' || :search || '%' OR
                al.action ILIKE '%' || :search || '%' OR
                t.name    ILIKE '%' || :search || '%')
@@ -53,7 +53,7 @@ async def list_audit_logs(
         """,
         {
             "tenant_id": tenant_id,
-            "search": search,
+            "search": search or "",
             "limit": page_size,
             "offset": (page - 1) * page_size,
         },

@@ -47,13 +47,13 @@ async def list_queue(
         FROM documents d
         JOIN tenants t ON t.tenant_id = d.tenant_id
         WHERE d.tenant_id = :tenant_id
-          AND (:status IS NULL OR d.status = :status)
+          AND (:status = '' OR d.status = :status)
         ORDER BY d.created_at DESC
         LIMIT :limit OFFSET :offset
         """,
         {
             "tenant_id": tenant_id,
-            "status": status,
+            "status": status or "",
             "limit": page_size,
             "offset": (page - 1) * page_size,
         },
