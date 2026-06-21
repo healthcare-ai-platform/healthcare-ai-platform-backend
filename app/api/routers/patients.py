@@ -1,7 +1,11 @@
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+
+from app.api.deps import get_current_user
+from app.api.schemas import Page
+from app.db.session import db
 
 router = APIRouter()
 
@@ -18,27 +22,103 @@ class Patient(BaseModel):
     reports: int
 
 
-_PATIENTS: list[Patient] = [
-    Patient(id="PT-2041", name="Ravi Sharma",   age=54, doctor="Dr. Mehta",  hospital="City General",      lastReport="CBC Report",        date="Jun 20", status="normal",   reports=8),
-    Patient(id="PT-1892", name="Sunita Verma",  age=38, doctor="Dr. Patel",  hospital="Apollo Diagnostics", lastReport="Discharge Summary", date="Jun 20", status="review",   reports=12),
-    Patient(id="PT-2209", name="Arjun Nair",    age=62, doctor="Dr. Singh",  hospital="Sunrise Clinic",    lastReport="Prescription",      date="Jun 19", status="normal",   reports=4),
-    Patient(id="PT-1773", name="Priya Iyer",    age=45, doctor="Dr. Kumar",  hospital="Metro Health",      lastReport="Referral Note",     date="Jun 19", status="abnormal", reports=6),
-    Patient(id="PT-2310", name="Deepak Joshi",  age=71, doctor="Dr. Mehta",  hospital="City General",      lastReport="Lipid Panel",       date="Jun 18", status="abnormal", reports=15),
-    Patient(id="PT-2311", name="Kavya Reddy",   age=29, doctor="Dr. Rao",    hospital="Riverside Care",    lastReport="MRI Report",        date="Jun 18", status="normal",   reports=2),
-    Patient(id="PT-2312", name="Manish Gupta",  age=48, doctor="Dr. Patel",  hospital="Apollo Diagnostics", lastReport="HbA1c Result",     date="Jun 17", status="review",   reports=9),
-    Patient(id="PT-2313", name="Anita Desai",   age=66, doctor="Dr. Singh",  hospital="City General",      lastReport="ECG Report",        date="Jun 17", status="abnormal", reports=11),
-]
-
-
-@router.get("/", response_model=list[Patient])
-def list_patients(
+@router.get("/", response_model=Page[Patient])
+async def list_patients(
     search: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-) -> list[Patient]:
-    results = _PATIENTS
-    if search:
-        q = search.lower()
-        results = [p for p in results if q in p.name.lower() or q in p.id.lower() or q in p.hospital.lower()]
-    if status and status != "all":
-        results = [p for p in results if p.status == status]
-    return results
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+) -> Page[Patient]:
+    tenant_id = current_user["tenant_id"]
+    if status == "all":
+        status = None
+
+    rows = await db.fetch_all(
+        """
+        WITH clinical AS (
+            SELECT
+                p.patient_id,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM report_results rr
+                        JOIN reports r2 ON r2.report_id = rr.report_id
+                        WHERE r2.patient_id = p.patient_id
+                          AND rr.flag IN ('high', 'low', 'critical')
+                    ) THEN 'abnormal'
+                    WHEN EXISTS (
+                        SELECT 1 FROM report_results rr
+                        JOIN reports r2 ON r2.report_id = rr.report_id
+                        WHERE r2.patient_id = p.patient_id
+                          AND rr.flag = 'borderline'
+                    ) THEN 'review'
+                    ELSE 'normal'
+                END AS clinical_status
+            FROM patients p
+            WHERE p.tenant_id = :tenant_id
+        ),
+        report_counts AS (
+            SELECT patient_id, COUNT(*)::int AS report_count
+            FROM reports
+            GROUP BY patient_id
+        ),
+        latest_report AS (
+            SELECT DISTINCT ON (r.patient_id)
+                r.patient_id,
+                r.doctor,
+                r.report_type,
+                r.report_date,
+                r.facility_id
+            FROM reports r
+            WHERE r.patient_id IN (SELECT patient_id FROM clinical)
+            ORDER BY r.patient_id, r.report_date DESC NULLS LAST, r.created_at DESC
+        )
+        SELECT
+            p.patient_id::text                               AS id,
+            p.name,
+            EXTRACT(YEAR FROM AGE(p.dob))::int               AS age,
+            COALESCE(lr.doctor, '')                          AS doctor,
+            COALESCE(f.name, '')                             AS hospital,
+            COALESCE(lr.report_type, '')                     AS last_report,
+            COALESCE(TO_CHAR(lr.report_date, 'Mon DD'), '')  AS date,
+            c.clinical_status                                AS status,
+            COALESCE(rc.report_count, 0)                     AS reports,
+            COUNT(*) OVER ()                                 AS total_count
+        FROM patients p
+        JOIN clinical c ON c.patient_id = p.patient_id
+        LEFT JOIN latest_report lr ON lr.patient_id = p.patient_id
+        LEFT JOIN facilities f ON f.facility_id = lr.facility_id
+        LEFT JOIN report_counts rc ON rc.patient_id = p.patient_id
+        WHERE (:search IS NULL OR
+               p.name ILIKE '%' || :search || '%' OR
+               p.external_id ILIKE '%' || :search || '%' OR
+               f.name ILIKE '%' || :search || '%')
+          AND (:status IS NULL OR c.clinical_status = :status)
+        ORDER BY p.created_at DESC
+        LIMIT :limit OFFSET :offset
+        """,
+        {
+            "tenant_id": tenant_id,
+            "search": search,
+            "status": status,
+            "limit": page_size,
+            "offset": (page - 1) * page_size,
+        },
+    )
+
+    total = rows[0]["total_count"] if rows else 0
+    items = [
+        Patient(
+            id=row["id"],
+            name=row["name"],
+            age=row["age"],
+            doctor=row["doctor"],
+            hospital=row["hospital"],
+            lastReport=row["last_report"],
+            date=row["date"],
+            status=row["status"],
+            reports=row["reports"],
+        )
+        for row in rows
+    ]
+    return Page.build(items, total, page, page_size)

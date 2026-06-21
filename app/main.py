@@ -1,6 +1,20 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api.routers import ai, audit, dashboard, patients, queue, tenants, upload
+from app.db.session import db
+from app.events.kafka import shutdown_producer
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await db.connect()
+    try:
+        yield
+    finally:
+        await db.disconnect()
+        await shutdown_producer()
 
 
 def create_app() -> FastAPI:
@@ -8,6 +22,7 @@ def create_app() -> FastAPI:
         title="Healthcare AI Platform Backend",
         version="0.1.0",
         description="FastAPI backend for the healthcare AI platform.",
+        lifespan=lifespan,
     )
 
     @app.get("/health", tags=["health"])
