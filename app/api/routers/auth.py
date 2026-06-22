@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import JWTError
 from pydantic import BaseModel
 
+from app.api.deps import get_current_user
 from app.core.auth import (
     create_access_token,
     create_refresh_token,
@@ -42,7 +43,7 @@ class RefreshRequest(BaseModel):
 async def login(body: LoginRequest, request: Request) -> TokenResponse:
     user = await db.fetch_one(
         """
-        SELECT user_id, tenant_id, facility_id, role, password_hash, status
+        SELECT user_id, tenant_id, facility_id, role, name, password_hash, status
         FROM users
         WHERE email = :email
         """,
@@ -96,7 +97,7 @@ async def accept_invite(body: AcceptInviteRequest, request: Request) -> TokenRes
     )
 
     user = await db.fetch_one(
-        "SELECT user_id, tenant_id, facility_id, role FROM users WHERE user_id = :uid",
+        "SELECT user_id, tenant_id, facility_id, role, name FROM users WHERE user_id = :uid",
         {"uid": str(invite["user_id"])},
     )
     payload = _build_payload(user)
@@ -133,6 +134,49 @@ async def logout() -> None:
     pass
 
 
+@router.get("/me")
+async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
+    row = await db.fetch_one(
+        """
+        SELECT u.user_id::text, u.name, u.email, u.role, u.status,
+               u.created_at, f.name AS facility_name
+        FROM users u
+        LEFT JOIN facilities f ON f.facility_id = u.facility_id
+        WHERE u.user_id = :uid
+        """,
+        {"uid": current_user["user_id"]},
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    logs = await db.fetch_all(
+        """
+        SELECT log_id::text AS id, action, resource,
+               COALESCE(ip_address::text, '') AS ip,
+               created_at
+        FROM audit_logs
+        WHERE user_id = :uid
+        ORDER BY created_at DESC
+        LIMIT 6
+        """,
+        {"uid": current_user["user_id"]},
+    )
+
+    r = dict(row)
+    r["created_at"] = row["created_at"].isoformat() if row["created_at"] else None
+    r["recent_activity"] = [
+        {
+            "id":       log["id"],
+            "action":   log["action"],
+            "resource": log["resource"],
+            "ip":       log["ip"],
+            "time":     log["created_at"].isoformat() if log["created_at"] else None,
+        }
+        for log in logs
+    ]
+    return r
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _build_payload(user) -> dict:
@@ -142,6 +186,7 @@ def _build_payload(user) -> dict:
         "tenant_id":   str(user["tenant_id"]),
         "facility_id": str(user["facility_id"]) if user["facility_id"] else None,
         "role":        user["role"],
+        "name":        user["name"],
     }
 
 

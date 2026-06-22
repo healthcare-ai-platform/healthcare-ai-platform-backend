@@ -211,7 +211,7 @@ async def invite_user(
     user_id = user_row["user_id"]
 
     token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=INVITE_EXPIRE_HOURS)
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=INVITE_EXPIRE_HOURS)
     await db.execute(
         """
         INSERT INTO invites (user_id, tenant_id, token, expires_at)

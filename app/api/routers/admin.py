@@ -55,50 +55,51 @@ async def create_tenant(
     request: Request,
     current_user: dict = Depends(_require_platform_admin),
 ) -> TenantResponse:
-    tenant_row = await db.fetch_one(
-        """
-        INSERT INTO tenants (name, plan)
-        VALUES (:name, :plan)
-        RETURNING tenant_id::text AS tenant_id, name, plan, status
-        """,
-        {"name": body.org_name, "plan": body.plan},
-    )
-    tenant_id = tenant_row["tenant_id"]
+    async with db.transaction():
+        tenant_row = await db.fetch_one(
+            """
+            INSERT INTO tenants (name, plan)
+            VALUES (:name, :plan)
+            RETURNING tenant_id::text AS tenant_id, name, plan, status
+            """,
+            {"name": body.org_name, "plan": body.plan},
+        )
+        tenant_id = tenant_row["tenant_id"]
 
-    user_row = await db.fetch_one(
-        """
-        INSERT INTO users (tenant_id, name, email, role, status)
-        VALUES (:tenant_id, :name, :email, 'tenant_admin', 'invited')
-        RETURNING user_id::text AS user_id
-        """,
-        {"tenant_id": tenant_id, "name": body.admin_name, "email": body.admin_email},
-    )
-    user_id = user_row["user_id"]
+        user_row = await db.fetch_one(
+            """
+            INSERT INTO users (tenant_id, name, email, role, status)
+            VALUES (:tenant_id, :name, :email, 'tenant_admin', 'invited')
+            RETURNING user_id::text AS user_id
+            """,
+            {"tenant_id": tenant_id, "name": body.admin_name, "email": body.admin_email},
+        )
+        user_id = user_row["user_id"]
 
-    token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=INVITE_EXPIRE_HOURS)
-    await db.execute(
-        """
-        INSERT INTO invites (user_id, tenant_id, token, expires_at)
-        VALUES (:user_id, :tenant_id, :token, :expires_at)
-        """,
-        {"user_id": user_id, "tenant_id": tenant_id, "token": token, "expires_at": expires_at},
-    )
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=INVITE_EXPIRE_HOURS)
+        await db.execute(
+            """
+            INSERT INTO invites (user_id, tenant_id, token, expires_at)
+            VALUES (:user_id, :tenant_id, :token, :expires_at)
+            """,
+            {"user_id": user_id, "tenant_id": tenant_id, "token": token, "expires_at": expires_at},
+        )
+
+        await db.execute(
+            """
+            INSERT INTO audit_logs (tenant_id, user_id, action, resource, ip_address)
+            VALUES (:tenant_id, :user_id, 'create_tenant', :resource, :ip)
+            """,
+            {
+                "tenant_id": tenant_id,
+                "user_id":   current_user["user_id"],
+                "resource":  f"tenant:{tenant_id}",
+                "ip":        request.client.host if request.client else None,
+            },
+        )
 
     send_invite_email(body.admin_email, body.admin_name, token, "tenant_admin")
-
-    await db.execute(
-        """
-        INSERT INTO audit_logs (tenant_id, user_id, action, resource, ip_address)
-        VALUES (:tenant_id, :user_id, 'create_tenant', :resource, :ip)
-        """,
-        {
-            "tenant_id": tenant_id,
-            "user_id":   current_user["user_id"],
-            "resource":  f"tenant:{tenant_id}",
-            "ip":        request.client.host if request.client else None,
-        },
-    )
 
     return TenantResponse(
         tenant_id=tenant_id,
@@ -351,7 +352,7 @@ async def invite_admin_user(
     user_id = user_row["user_id"]
 
     token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=INVITE_EXPIRE_HOURS)
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=INVITE_EXPIRE_HOURS)
     await db.execute(
         """
         INSERT INTO invites (user_id, tenant_id, token, expires_at)
