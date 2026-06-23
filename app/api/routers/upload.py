@@ -19,6 +19,18 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "")
 
+# Roles that cannot upload at all
+UPLOAD_BLOCKED_ROLES = {"analyst", "viewer"}
+
+# Per-role allowed report types (None = all types allowed)
+ROLE_ALLOWED_TYPES: dict[str, set[str] | None] = {
+    "doctor":       {"clinical_note", "prescription", "discharge_summary", "radiology"},
+    "ops":          None,
+    "manager":      None,
+    "tenant_admin": None,
+    "platform_admin": None,
+}
+
 
 class Patient(BaseModel):
     name: str
@@ -68,6 +80,17 @@ async def upload_pdf(
     # 1. Validate
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files accepted.")
+
+    role = current_user.get("role", "")
+    if role in UPLOAD_BLOCKED_ROLES:
+        raise HTTPException(status_code=403, detail=f"Your role ({role}) is not permitted to upload documents.")
+
+    allowed_types = ROLE_ALLOWED_TYPES.get(role)
+    if allowed_types is not None and report_type not in allowed_types:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Role '{role}' may not upload '{report_type}'. Allowed: {', '.join(sorted(allowed_types))}.",
+        )
 
     # 2. Generate IDs — never trust user input for paths
     document_id = str(uuid.uuid4())

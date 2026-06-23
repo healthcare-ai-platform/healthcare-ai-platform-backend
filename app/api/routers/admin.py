@@ -136,6 +136,7 @@ async def get_tenant(
         """,
         {"id": tenant_id},
     )
+    
     if not row:
         raise HTTPException(status_code=404, detail="Tenant not found")
     return dict(row)
