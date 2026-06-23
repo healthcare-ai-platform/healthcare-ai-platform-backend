@@ -41,14 +41,14 @@ class Tenant(BaseModel):
 class CreateFacilityRequest(BaseModel):
     name: str
     city: str | None = None
-    state: str | None = None
+    address: str | None = None
 
 
 class FacilityResponse(BaseModel):
     facility_id: str
     name: str
     city: str | None
-    state: str | None
+    address: str | None
 
 
 class InviteUserRequest(BaseModel):
@@ -136,11 +136,11 @@ async def create_facility(
 
     row = await db.fetch_one(
         """
-        INSERT INTO facilities (tenant_id, name, city, state)
-        VALUES (:tenant_id, :name, :city, :state)
-        RETURNING facility_id::text AS facility_id, name, city, state
+        INSERT INTO facilities (tenant_id, name, city, address)
+        VALUES (:tenant_id, :name, :city, :address)
+        RETURNING facility_id::text AS facility_id, name, city, address
         """,
-        {"tenant_id": tenant_id, "name": body.name, "city": body.city, "state": body.state},
+        {"tenant_id": tenant_id, "name": body.name, "city": body.city, "address": body.address},
     )
     await _write_audit(
         tenant_id, current_user["user_id"],
@@ -158,7 +158,7 @@ async def list_facilities(
 
     rows = await db.fetch_all(
         """
-        SELECT facility_id::text AS facility_id, name, city, state
+        SELECT facility_id::text AS facility_id, name, city, address
         FROM facilities
         WHERE tenant_id = :tid
         ORDER BY name

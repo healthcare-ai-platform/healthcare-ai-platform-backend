@@ -63,17 +63,20 @@ INSERT INTO tenants (tenant_id, name, plan, status)
 VALUES ('00000000-0000-0000-0000-000000000001', 'Platform', 'enterprise', 'active')
 ON CONFLICT (tenant_id) DO NOTHING;
 
-INSERT INTO users (user_id, tenant_id, name, email, role, status)
+INSERT INTO users (user_id, tenant_id, name, email, role, status, password_hash)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
     '00000000-0000-0000-0000-000000000001',
     'Platform Admin',
     'admin@healthai.local',
     'platform_admin',
-    'invited'
+    'active',
+    '$2b$12$x1HHkA69CErnRup/KHvvl.yydKKDh6DFFQb2RuHAn6E5ZEbKNjl1O'
 )
 ON CONFLICT (user_id) DO UPDATE
-    SET role = 'platform_admin',
-        email = EXCLUDED.email;
+    SET role          = 'platform_admin',
+        email         = EXCLUDED.email,
+        status        = 'active',
+        password_hash = EXCLUDED.password_hash;
 
 COMMIT;
