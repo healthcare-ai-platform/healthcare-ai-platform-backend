@@ -246,6 +246,7 @@ async def list_users(
             u.email,
             u.role,
             u.status,
+            u.created_at,
             f.name           AS facility_name
         FROM users u
         LEFT JOIN facilities f ON f.facility_id = u.facility_id
@@ -254,7 +255,12 @@ async def list_users(
         """,
         {"tid": tenant_id},
     )
-    return [dict(row) for row in rows]
+    result = []
+    for row in rows:
+        r = dict(row)
+        r["created_at"] = row["created_at"].isoformat() if row["created_at"] else None
+        result.append(r)
+    return result
 
 
 @router.put("/{tenant_id}/users/{user_id}/suspend")

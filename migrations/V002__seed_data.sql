@@ -19,16 +19,20 @@ INSERT INTO facilities (facility_id, tenant_id, name, type, city, address, statu
     ('22222222-0000-0000-0000-000000000003', '11111111-0000-0000-0000-000000000002',
      'Riverside Primary Clinic', 'clinic',         'Brooklyn',  '5 River Rd, BK 11201',      'active');
 
--- 3. users
-INSERT INTO users (user_id, tenant_id, email, name, role, status) VALUES
+-- 3. users  (password for all seed accounts: Admin123!)
+INSERT INTO users (user_id, tenant_id, email, name, role, status, password_hash) VALUES
     ('33333333-0000-0000-0000-000000000001', '11111111-0000-0000-0000-000000000001',
-     'admin@citygeneral.com',   'Alice Admin',    'admin',   'active'),
+     'admin@citygeneral.com',   'Alice Admin',    'tenant_admin', 'active',
+     '$2b$12$Z.W0UsgaxBzvR694RD/b1OjcJxat3lO41Iy5EUVMQ6SCwZhXspeIK'),
     ('33333333-0000-0000-0000-000000000002', '11111111-0000-0000-0000-000000000001',
-     'dr.smith@citygeneral.com','Dr. John Smith', 'doctor',  'active'),
+     'dr.smith@citygeneral.com','Dr. John Smith', 'doctor',       'active',
+     '$2b$12$Z.W0UsgaxBzvR694RD/b1OjcJxat3lO41Iy5EUVMQ6SCwZhXspeIK'),
     ('33333333-0000-0000-0000-000000000003', '11111111-0000-0000-0000-000000000001',
-     'analyst@citygeneral.com', 'Bob Analyst',    'analyst', 'active'),
+     'analyst@citygeneral.com', 'Bob Analyst',    'analyst',      'active',
+     '$2b$12$Z.W0UsgaxBzvR694RD/b1OjcJxat3lO41Iy5EUVMQ6SCwZhXspeIK'),
     ('33333333-0000-0000-0000-000000000004', '11111111-0000-0000-0000-000000000002',
-     'dr.jones@riverside.com',  'Dr. Mary Jones', 'doctor',  'active');
+     'dr.jones@riverside.com',  'Dr. Mary Jones', 'doctor',       'active',
+     '$2b$12$Z.W0UsgaxBzvR694RD/b1OjcJxat3lO41Iy5EUVMQ6SCwZhXspeIK');
 
 -- 4. patients
 INSERT INTO patients (patient_id, tenant_id, external_id, name, dob, gender, status) VALUES
