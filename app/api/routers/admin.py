@@ -55,72 +55,80 @@ async def create_tenant(
     request: Request,
     current_user: dict = Depends(_require_platform_admin),
 ) -> TenantResponse:
-    async with db.transaction():
-        tenant_row = await db.fetch_one(
-            """
-            INSERT INTO tenants (name, plan)
-            VALUES (:name, :plan)
-            RETURNING tenant_id::text AS tenant_id, name, plan, status
-            """,
-            {"name": body.org_name, "plan": body.plan},
+    
+    try:
+        async with db.transaction():
+            tenant_row = await db.fetch_one(
+                """
+                INSERT INTO tenants (name, plan)
+                VALUES (:name, :plan)
+                RETURNING tenant_id::text AS tenant_id, name, plan, status
+                """,
+                {"name": body.org_name, "plan": body.plan},
+            )
+            tenant_id = tenant_row["tenant_id"]
+            
+            print(f"Created tenant '{body.org_name}' (tenant_id={tenant_id}).")
+            
+            user_row = await db.fetch_one(
+                """
+                INSERT INTO users (tenant_id, name, email, role, status)
+                VALUES (:tenant_id, :name, :email, 'tenant_admin', 'invited')
+                RETURNING user_id::text AS user_id
+                """,
+                {"tenant_id": tenant_id, "name": body.admin_name, "email": body.admin_email},
+            )
+            user_id = user_row["user_id"]
+
+            token = secrets.token_urlsafe(32)
+            expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=INVITE_EXPIRE_HOURS)
+            await db.execute(
+                """
+                INSERT INTO invites (user_id, tenant_id, token, expires_at)
+                VALUES (:user_id, :tenant_id, :token, :expires_at)
+                """,
+                {"user_id": user_id, "tenant_id": tenant_id, "token": token, "expires_at": expires_at},
+            )
+
+            await db.execute(
+                """
+                INSERT INTO audit_logs (tenant_id, user_id, action, resource, ip_address)
+                VALUES (:tenant_id, :user_id, 'create_tenant', :resource, :ip)
+                """,
+                {
+                    "tenant_id": tenant_id,
+                    "user_id":   current_user["user_id"],
+                    "resource":  f"tenant:{tenant_id}",
+                    "ip":        request.client.host if request.client else None,
+                },
+            )
+
+        send_invite_email(body.admin_email, body.admin_name, token, "tenant_admin")
+
+        return TenantResponse(
+            tenant_id=tenant_id,
+            name=tenant_row["name"],
+            plan=tenant_row["plan"],
+            status=tenant_row["status"],
         )
-        tenant_id = tenant_row["tenant_id"]
-
-        user_row = await db.fetch_one(
-            """
-            INSERT INTO users (tenant_id, name, email, role, status)
-            VALUES (:tenant_id, :name, :email, 'tenant_admin', 'invited')
-            RETURNING user_id::text AS user_id
-            """,
-            {"tenant_id": tenant_id, "name": body.admin_name, "email": body.admin_email},
-        )
-        user_id = user_row["user_id"]
-
-        token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=INVITE_EXPIRE_HOURS)
-        await db.execute(
-            """
-            INSERT INTO invites (user_id, tenant_id, token, expires_at)
-            VALUES (:user_id, :tenant_id, :token, :expires_at)
-            """,
-            {"user_id": user_id, "tenant_id": tenant_id, "token": token, "expires_at": expires_at},
-        )
-
-        await db.execute(
-            """
-            INSERT INTO audit_logs (tenant_id, user_id, action, resource, ip_address)
-            VALUES (:tenant_id, :user_id, 'create_tenant', :resource, :ip)
-            """,
-            {
-                "tenant_id": tenant_id,
-                "user_id":   current_user["user_id"],
-                "resource":  f"tenant:{tenant_id}",
-                "ip":        request.client.host if request.client else None,
-            },
-        )
-
-    send_invite_email(body.admin_email, body.admin_name, token, "tenant_admin")
-
-    return TenantResponse(
-        tenant_id=tenant_id,
-        name=tenant_row["name"],
-        plan=tenant_row["plan"],
-        status=tenant_row["status"],
-    )
-
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to create tenant: {e}") from e
 
 @router.get("/tenants")
 async def list_tenants_admin(
     current_user: dict = Depends(_require_platform_admin),
 ) -> list[dict]:
-    rows = await db.fetch_all(
-        """
-        SELECT tenant_id::text, name, plan, status, created_at
-        FROM tenants
-        ORDER BY created_at DESC
-        """
-    )
-    return [dict(row) for row in rows]
+    try:
+        rows = await db.fetch_all(
+            """
+            SELECT tenant_id::text, name, plan, status, created_at
+            FROM tenants
+            ORDER BY created_at DESC
+            """
+        )
+        return [dict(row) for row in rows]
+    except Exception as e:
+        return {"error": f"Failed to list tenants: {str(e)}"}
 
 
 @router.get("/tenants/{tenant_id}")
@@ -282,7 +290,7 @@ async def platform_logs(
         FROM audit_logs al
         JOIN users u   ON u.user_id   = al.user_id
         JOIN tenants t ON t.tenant_id = al.tenant_id
-        WHERE (:tenant_id IS NULL OR al.tenant_id = :tenant_id::uuid)
+        WHERE (:tenant_id IS NULL OR al.tenant_id = :tenant_id ::uuid)
           AND (:search = '' OR
                u.name    ILIKE '%' || :search || '%' OR
                al.action ILIKE '%' || :search || '%' OR
@@ -337,6 +345,8 @@ async def invite_admin_user(
     request: Request,
     current_user: dict = Depends(_require_platform_admin),
 ) -> dict:
+    
+    
     user_row = await db.fetch_one(
         """
         INSERT INTO users (tenant_id, name, email, role, status, invited_by)

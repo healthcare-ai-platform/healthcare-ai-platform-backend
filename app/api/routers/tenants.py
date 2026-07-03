@@ -38,8 +38,12 @@ class Tenant(BaseModel):
     avgTime: str
 
 
+FACILITY_TYPES = {"hospital", "clinic", "lab", "imaging_center", "pharmacy"}
+
+
 class CreateFacilityRequest(BaseModel):
     name: str
+    type: str
     city: str | None = None
     address: str | None = None
 
@@ -47,6 +51,7 @@ class CreateFacilityRequest(BaseModel):
 class FacilityResponse(BaseModel):
     facility_id: str
     name: str
+    type: str
     city: str | None
     address: str | None
 
@@ -134,13 +139,19 @@ async def create_facility(
 ) -> FacilityResponse:
     _assert_own_tenant(current_user, tenant_id)
 
+    if body.type not in FACILITY_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid facility type '{body.type}'. Allowed: {', '.join(sorted(FACILITY_TYPES))}.",
+        )
+
     row = await db.fetch_one(
         """
-        INSERT INTO facilities (tenant_id, name, city, address)
-        VALUES (:tenant_id, :name, :city, :address)
-        RETURNING facility_id::text AS facility_id, name, city, address
+        INSERT INTO facilities (tenant_id, name, type, city, address)
+        VALUES (:tenant_id, :name, :type, :city, :address)
+        RETURNING facility_id::text AS facility_id, name, type, city, address
         """,
-        {"tenant_id": tenant_id, "name": body.name, "city": body.city, "address": body.address},
+        {"tenant_id": tenant_id, "name": body.name, "type": body.type, "city": body.city, "address": body.address},
     )
     await _write_audit(
         tenant_id, current_user["user_id"],
@@ -152,13 +163,13 @@ async def create_facility(
 @router.get("/{tenant_id}/facilities", response_model=list[FacilityResponse])
 async def list_facilities(
     tenant_id: str,
-    current_user: dict = Depends(require_roles("tenant_admin")),
+    current_user: dict = Depends(get_current_user),
 ) -> list[FacilityResponse]:
     _assert_own_tenant(current_user, tenant_id)
 
     rows = await db.fetch_all(
         """
-        SELECT facility_id::text AS facility_id, name, city, address
+        SELECT facility_id::text AS facility_id, name, type, city, address
         FROM facilities
         WHERE tenant_id = :tid
         ORDER BY name

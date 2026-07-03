@@ -7,7 +7,7 @@ from email.mime.text import MIMEText
 import boto3
 from botocore.exceptions import ClientError
 
-from app.core.config import APP_BASE_URL, SES_FROM_EMAIL
+from app.core.config import APP_BASE_URL, PASSWORD_RESET_EXPIRE_HOURS, SES_FROM_EMAIL
 
 logger = logging.getLogger("healthcare-platform")
 
@@ -34,6 +34,31 @@ def send_invite_email(to_email: str, name: str, token: str, role: str) -> None:
         _send_smtp(smtp_host, to_email, subject, body_text, body_html, invite_url)
     else:
         _send_ses(to_email, subject, body_text, body_html, invite_url)
+
+
+def send_password_reset_email(to_email: str, name: str, token: str) -> None:
+    reset_url = f"{APP_BASE_URL}/reset-password?token={token}"
+    subject = "Reset your Healthcare AI Platform password"
+    body_text = (
+        f"Hi {name},\n\n"
+        "We received a request to reset your password.\n\n"
+        f"Reset it here:\n{reset_url}\n\n"
+        f"This link expires in {PASSWORD_RESET_EXPIRE_HOURS} hours. "
+        "If you didn't request this, you can safely ignore this email."
+    )
+    body_html = f"""
+<h2>Reset your password</h2>
+<p>Hi {name},</p>
+<p>We received a request to reset your password.</p>
+<p><a href="{reset_url}" style="background:#185fa5;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;">Reset Password</a></p>
+<p style="margin-top:16px;color:#666;font-size:13px;">This link expires in {PASSWORD_RESET_EXPIRE_HOURS} hours. If you didn't request this, you can safely ignore this email.</p>
+"""
+
+    smtp_host = os.getenv("SMTP_HOST")
+    if smtp_host:
+        _send_smtp(smtp_host, to_email, subject, body_text, body_html, reset_url)
+    else:
+        _send_ses(to_email, subject, body_text, body_html, reset_url)
 
 
 def _send_smtp(smtp_host: str, to_email: str, subject: str, body_text: str, body_html: str, invite_url: str) -> None:

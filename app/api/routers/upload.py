@@ -31,6 +31,14 @@ ROLE_ALLOWED_TYPES: dict[str, set[str] | None] = {
     "platform_admin": None,
 }
 
+# Report types that require clinical authorship — never uploadable by non-clinical
+# roles, even though those roles otherwise have no fixed allowlist (None above).
+CLINICAL_TYPES = {"clinical_note", "prescription", "discharge_summary"}
+
+ROLE_BLOCKED_TYPES: dict[str, set[str]] = {
+    "ops": CLINICAL_TYPES,
+}
+
 
 class Patient(BaseModel):
     name: str
@@ -92,29 +100,52 @@ async def upload_pdf(
             detail=f"Role '{role}' may not upload '{report_type}'. Allowed: {', '.join(sorted(allowed_types))}.",
         )
 
+    if report_type in ROLE_BLOCKED_TYPES.get(role, set()):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Role '{role}' may not upload '{report_type}' — requires clinical authorship.",
+        )
+
     # 2. Generate IDs — never trust user input for paths
     document_id = str(uuid.uuid4())
     tenant_id   = current_user["tenant_id"]
     user_id     = current_user["user_id"]
     today       = datetime.utcnow()
 
+    # documents.facility_id is NOT NULL — fall back to the tenant's first facility
+    # when the uploader has none assigned (facility_id isn't populated on invite/create yet).
+    facility_id = current_user.get("facility_id")
+    if not facility_id:
+        facility_row = await db.fetch_one(
+            "SELECT facility_id::text AS facility_id FROM facilities WHERE tenant_id = :tenant_id ORDER BY created_at LIMIT 1",
+            {"tenant_id": tenant_id},
+        )
+        if not facility_row:
+            raise HTTPException(
+                status_code=400,
+                detail="This tenant has no facilities yet. Create one via "
+                       "POST /api/v1/tenants/{tenant_id}/facilities before uploading documents.",
+            )
+        facility_id = facility_row["facility_id"]
+
     # 3. Build S3 key — no local disk involved
     s3_key = f"raw/{tenant_id}/{today.year}/{today.month:02d}/{today.day:02d}/{document_id}.pdf"
 
     # 4. Stream directly to S3
-    
+
     success = upload_to_s3(file.file, S3_BUCKET, s3_key)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to upload PDF to S3.")
     # 5. Write metadata to Postgres (status = received)
     await db.execute("""
         INSERT INTO documents
-          (document_id, tenant_id, uploaded_by, report_type, source, s3_path, status, created_at)
+          (document_id, tenant_id, facility_id, uploaded_by, report_type, source, s3_path, status, created_at)
         VALUES
-          (:document_id, :tenant_id, :user_id, :report_type, 'pdf_upload', :s3_path, 'received', NOW())
+          (:document_id, :tenant_id, :facility_id, :user_id, :report_type, 'pdf_upload', :s3_path, 'received', NOW())
     """, {
         "document_id": document_id,
         "tenant_id":   tenant_id,
+        "facility_id": facility_id,
         "user_id":     user_id,
         "report_type": report_type,
         "s3_path":     f"s3://{S3_BUCKET}/{s3_key}"

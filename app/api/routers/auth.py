@@ -13,8 +13,9 @@ from app.core.auth import (
     hash_password,
     verify_password,
 )
-from app.core.config import INVITE_EXPIRE_HOURS
+from app.core.config import PASSWORD_RESET_EXPIRE_HOURS
 from app.db.session import db
+from app.services.email_service import send_password_reset_email
 
 router = APIRouter()
 
@@ -31,6 +32,15 @@ class TokenResponse(BaseModel):
 
 
 class AcceptInviteRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
 
@@ -105,6 +115,79 @@ async def accept_invite(body: AcceptInviteRequest, request: Request) -> TokenRes
         tenant_id=str(user["tenant_id"]),
         user_id=str(user["user_id"]),
         action="accept_invite",
+        resource="auth",
+        ip=_client_ip(request),
+    )
+    return TokenResponse(
+        access_token=create_access_token(payload),
+        refresh_token=create_refresh_token(payload),
+    )
+
+
+@router.post("/forgot-password", status_code=202)
+async def forgot_password(body: ForgotPasswordRequest) -> dict:
+    generic_response = {
+        "message": "If an account exists for that email, a reset link has been sent."
+    }
+
+    user = await db.fetch_one(
+        "SELECT user_id, name FROM users WHERE email = :email AND status = 'active'",
+        {"email": body.email},
+    )
+    if not user:
+        # Same response whether or not the email exists — avoids leaking account existence.
+        return generic_response
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=PASSWORD_RESET_EXPIRE_HOURS)
+    await db.execute(
+        """
+        INSERT INTO password_resets (user_id, token, expires_at)
+        VALUES (:user_id, :token, :expires_at)
+        """,
+        {"user_id": str(user["user_id"]), "token": token, "expires_at": expires_at},
+    )
+    send_password_reset_email(body.email, user["name"], token)
+
+    return generic_response
+
+
+@router.post("/reset-password", response_model=TokenResponse)
+async def reset_password(body: ResetPasswordRequest, request: Request) -> TokenResponse:
+    reset = await db.fetch_one(
+        """
+        SELECT reset_id, user_id, used_at, expires_at < NOW() AS is_expired
+        FROM password_resets
+        WHERE token = :token
+        """,
+        {"token": body.token},
+    )
+    if not reset:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+    if reset["used_at"]:
+        raise HTTPException(status_code=400, detail="Reset link already used")
+    if reset["is_expired"]:
+        raise HTTPException(status_code=400, detail="Reset link expired")
+
+    pw_hash = hash_password(body.new_password)
+    await db.execute(
+        "UPDATE users SET password_hash = :pw WHERE user_id = :uid",
+        {"pw": pw_hash, "uid": str(reset["user_id"])},
+    )
+    await db.execute(
+        "UPDATE password_resets SET used_at = NOW() WHERE reset_id = :rid",
+        {"rid": str(reset["reset_id"])},
+    )
+
+    user = await db.fetch_one(
+        "SELECT user_id, tenant_id, facility_id, role, name FROM users WHERE user_id = :uid",
+        {"uid": str(reset["user_id"])},
+    )
+    payload = _build_payload(user)
+    await _write_audit(
+        tenant_id=str(user["tenant_id"]),
+        user_id=str(user["user_id"]),
+        action="reset_password",
         resource="auth",
         ip=_client_ip(request),
     )
