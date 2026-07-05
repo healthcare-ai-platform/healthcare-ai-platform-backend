@@ -16,8 +16,9 @@ _producer: AIOKafkaProducer | None = None
 async def get_producer() -> AIOKafkaProducer:
     global _producer
     if _producer is None:
-        _producer = AIOKafkaProducer(bootstrap_servers=_BOOTSTRAP_SERVERS)
-        await _producer.start()
+        candidate = AIOKafkaProducer(bootstrap_servers=_BOOTSTRAP_SERVERS)
+        await candidate.start()  # if this raises, _producer stays None so the next call retries
+        _producer = candidate
     return _producer
 
 
@@ -29,8 +30,11 @@ async def shutdown_producer() -> None:
 
 
 async def publish_kafka_event(topic: str, payload: dict) -> None:
-    producer = await get_producer()
+    # The document is already durably written to S3 + Postgres by the time this is
+    # called — a broker outage here should degrade (event lost, doc stuck until
+    # reconciled) rather than fail the whole upload request with a 500.
     try:
+        producer = await get_producer()
         await producer.send_and_wait(topic, value=json.dumps(payload).encode("utf-8"))
         common_logger(f"[KAFKA] topic={topic!r} payload={payload}", level="info")
     except Exception as exc:
