@@ -1,4 +1,5 @@
 from datetime import datetime
+import io
 import os
 import uuid
 from pathlib import Path
@@ -174,19 +175,58 @@ async def upload_json(
     payload: PatientRecord,
     current_user: dict = Depends(get_current_user)
     ) -> UploadResponse:
-    upload_id = str(uuid.uuid4())
-    common_logger(f"JSON record received for patient '{payload.patient.name}' (id={upload_id})")
-    
+    document_id = str(uuid.uuid4())
+    common_logger(f"JSON record received for patient '{payload.patient.name}' (id={document_id})")
+
     tenant_id   = current_user["tenant_id"]
     user_id     = current_user["user_id"]
+    report_type = payload.report.type
     today       = datetime.utcnow()
-    
-    
-    # save into s3 in parquet format
-    temp_file = Path(f"/tmp/{upload_id}.json")
-    temp_file.write_text(payload.model_dump_json())
-    success = upload_to_s3(str(temp_file), S3_BUCKET, f"json/{tenant_id}/{user_id}/{today.year}/{today.month:02d}/{today.day:02d}/{upload_id}.json")
-    temp_file.unlink()  # clean up
+
+    # documents.facility_id is NOT NULL — fall back to the tenant's first facility
+    # when the uploader has none assigned (facility_id isn't populated on invite/create yet).
+    facility_id = current_user.get("facility_id")
+    if not facility_id:
+        facility_row = await db.fetch_one(
+            "SELECT facility_id::text AS facility_id FROM facilities WHERE tenant_id = :tenant_id ORDER BY created_at LIMIT 1",
+            {"tenant_id": tenant_id},
+        )
+        if not facility_row:
+            raise HTTPException(
+                status_code=400,
+                detail="This tenant has no facilities yet. Create one via "
+                       "POST /api/v1/tenants/{tenant_id}/facilities before uploading documents.",
+            )
+        facility_id = facility_row["facility_id"]
+
+    s3_key = f"raw/{tenant_id}/{today.year}/{today.month:02d}/{today.day:02d}/{document_id}.json"
+
+    success = upload_to_s3(io.BytesIO(payload.model_dump_json().encode("utf-8")), S3_BUCKET, s3_key)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to upload JSON to S3.")
-    return UploadResponse(upload_id=upload_id, message=f"Record for patient '{payload.patient.name}' received.")
+
+    await db.execute("""
+        INSERT INTO documents
+          (document_id, tenant_id, facility_id, uploaded_by, report_type, source, s3_path, status, created_at)
+        VALUES
+          (:document_id, :tenant_id, :facility_id, :user_id, :report_type, 'json_upload', :s3_path, 'received', NOW())
+    """, {
+        "document_id": document_id,
+        "tenant_id":   tenant_id,
+        "facility_id": facility_id,
+        "user_id":     user_id,
+        "report_type": report_type,
+        "s3_path":     f"s3://{S3_BUCKET}/{s3_key}",
+    })
+
+    await publish_kafka_event("healthai.report.received", {
+        "document_id": document_id,
+        "user_id":     user_id,
+        "tenant_id":   tenant_id,
+        "source":      "json_upload",
+        "report_type": report_type,
+        "s3_path":     f"s3://{S3_BUCKET}/{s3_key}",
+        "uploaded_at": today.isoformat(),
+    })
+
+    return UploadResponse(upload_id=document_id, message=f"Record for patient '{payload.patient.name}' received.")

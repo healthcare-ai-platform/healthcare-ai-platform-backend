@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.api.deps import get_current_user
+from app.db import snowflake_client
 from app.db.session import db
 
 router = APIRouter()
@@ -38,6 +39,13 @@ class Alert(BaseModel):
 class ThroughputPoint(BaseModel):
     hour: str
     docs: int
+
+
+class LabAnalyticsPoint(BaseModel):
+    testName: str
+    flag: str
+    resultCount: int
+    avgConfidence: float
 
 
 @router.get("/kpis", response_model=KPIs)
@@ -213,4 +221,41 @@ async def get_throughput(current_user: dict = Depends(get_current_user)) -> list
     return [
         ThroughputPoint(hour=fmt_hour(h), docs=counts.get(h, 0))
         for h in range(0, 24, 2)
+    ]
+
+
+@router.get("/lab-analytics", response_model=list[LabAnalyticsPoint])
+async def get_lab_analytics(current_user: dict = Depends(get_current_user)) -> list[LabAnalyticsPoint]:
+    """
+    Flag distribution + extraction confidence per test — sourced from
+    Snowflake's dbt marts (fct_lab_results), not the operational Postgres.
+    This is the warehouse/BI view: cleaned, deduplicated, tenant-scoped
+    analytics over every extracted result, independent of pipeline status.
+    """
+    tenant_id = current_user["tenant_id"]
+
+    rows = await snowflake_client.fetch_all(
+        f"""
+        SELECT
+            test_name,
+            flag,
+            COUNT(*)                    AS result_count,
+            AVG(extraction_confidence)  AS avg_confidence
+        FROM {snowflake_client.MARTS_SCHEMA}.FCT_LAB_RESULTS
+        WHERE tenant_id = %(tenant_id)s
+          AND flag IS NOT NULL
+        GROUP BY test_name, flag
+        ORDER BY test_name, flag
+        """,
+        {"tenant_id": tenant_id},
+    )
+
+    return [
+        LabAnalyticsPoint(
+            testName=row["TEST_NAME"],
+            flag=row["FLAG"],
+            resultCount=row["RESULT_COUNT"],
+            avgConfidence=round(float(row["AVG_CONFIDENCE"] or 0.0), 4),
+        )
+        for row in rows
     ]

@@ -7,6 +7,7 @@ load_dotenv()  # must run before local imports so env vars are set when modules 
 from fastapi import FastAPI
 
 from app.api.routers import ai, admin, audit, auth, dashboard, patients, queue, tenants, upload
+from app.db import snowflake_client
 from app.db.session import db
 from app.db.warehouse import warehouse
 from app.events.kafka import shutdown_producer
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI):
         await db.disconnect()
         await warehouse.disconnect()
         await shutdown_producer()
+        snowflake_client.shutdown()
 
 
 def create_app() -> FastAPI:
