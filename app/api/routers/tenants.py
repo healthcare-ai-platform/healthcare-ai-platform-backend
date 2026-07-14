@@ -69,7 +69,7 @@ class InviteUserRequest(BaseModel):
 async def list_tenants(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles("platform_admin")),
 ) -> Page[Tenant]:
     rows = await db.fetch_all(
         """

@@ -61,7 +61,7 @@ async def get_kpis(current_user: dict = Depends(get_current_user)) -> KPIs:
             COUNT(*) FILTER (WHERE created_at < :today AND created_at >= :yesterday) AS docs_yesterday,
             AVG(
                 EXTRACT(EPOCH FROM (updated_at - created_at)) / 60.0
-            ) FILTER (WHERE status = 'loaded' AND created_at >= :today)        AS avg_min,
+            ) FILTER (WHERE status in ('loaded','extracted') AND created_at >= :today)        AS avg_min,
             COUNT(*) FILTER (WHERE status = 'failed')                           AS dlq_backlog,
             COUNT(*) FILTER (WHERE status = 'failed' AND created_at >= :today) AS dlq_today
         FROM documents
@@ -127,7 +127,7 @@ async def get_pipeline_stages(current_user: dict = Depends(get_current_user)) ->
         ("received",   "Received",          "#185fa5"),
         ("ocr",        "OCR complete",       "#0f6e56"),
         ("extracting", "LLM extracting",     "#534ab7"),
-        ("loaded",     "Loaded",             "#3b6d11"),
+        ("extracted",  "Extracted",          "#3b6d11"),
         ("failed",     "Failed / DLQ",       "#a32d2d"),
     ]
 
